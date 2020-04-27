@@ -1,20 +1,21 @@
 package adapter
 
 import (
-	"crypto/tls"
+	"context"
 	"fmt"
-	"io/ioutil"
-	"net"
-	"net/http"
-	"net/url"
-	"os"
-	"strings"
-
-	"github.com/globalsign/mgo"
 	"github.com/gogo/protobuf/proto"
 	"github.com/golang/snappy"
 	"github.com/prometheus/prometheus/prompb"
 	"github.com/sirupsen/logrus"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/mongo/readpref"
+	"io/ioutil"
+	"net/http"
+	"net/url"
+	"os"
+	"time"
 
 	"github.com/gorilla/handlers"
 	"github.com/julienschmidt/httprouter"
@@ -37,67 +38,59 @@ type sample struct {
 
 // MongoDBAdapter is an implemantation of prometheus remote stprage adapter for MongoDB
 type MongoDBAdapter struct {
-	session *mgo.Session
-	c       *mgo.Collection
+	client *mongo.Client
+	coll   *mongo.Collection
 }
 
 // New provides a MongoDBAdapter after initialization
-func New(urlString, database, collection string) (*MongoDBAdapter, error) {
+func New(urlString, database string, collection string) (*MongoDBAdapter, error) {
 
 	u, err := url.Parse(urlString)
 	if err != nil {
 		return nil, fmt.Errorf("url parse error: %s", err.Error())
 	}
-	query := u.Query()
 	u.RawQuery = ""
 
-	// DialInfo
-	dialInfo, err := mgo.ParseURL(u.String())
+	// 初始化连接参数
+	client, err := mongo.NewClient(options.Client().ApplyURI(u.String()))
+	ctx, _ := context.WithTimeout(context.Background(), 10*time.Second)
+	err = client.Connect(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("mongo url parse error: %s", err.Error())
 	}
-
-	// SSL
-	if strings.ToLower(query.Get("ssl")) == "true" {
-		dialInfo.DialServer = func(addr *mgo.ServerAddr) (net.Conn, error) {
-			return tls.Dial("tcp", addr.String(), &tls.Config{})
-		}
-	}
-
-	// Dial
-	session, err := mgo.DialWithInfo(dialInfo)
+	err = client.Ping(ctx, readpref.Primary())
 	if err != nil {
-		return nil, fmt.Errorf("dial error: %s", err.Error())
+		return nil, fmt.Errorf("mongo server is offline: %s", err.Error())
 	}
 
-	// Database
-	if dialInfo.Database == "" {
-		dialInfo.Database = database
-	}
-	c := session.DB(dialInfo.Database).C(collection)
+	// 获取数据库和表名
+	// 返回adapter
+	c := client.Database(database).Collection(collection)
 
 	return &MongoDBAdapter{
-		session: session,
-		c:       c,
+		client: client,
+		coll:   c,
 	}, nil
 }
 
 // Close closes the connection with MongoDB
-func (p *MongoDBAdapter) Close() {
-
-	p.session.Close()
+func (adapter *MongoDBAdapter) Close() {
+	ctx, _ := context.WithTimeout(context.Background(), 10*time.Second)
+	err := adapter.client.Disconnect(ctx)
+	if err != nil {
+		logrus.Error("ERROR in close client", err)
+	}
 }
 
 // Run serves with http listener
-func (p *MongoDBAdapter) Run(address string) error {
-
+func (adapter *MongoDBAdapter) Run(address string) error {
 	router := httprouter.New()
-	router.POST("/write", p.handleWriteRequest)
-	router.POST("/read", p.handleReadRequest)
+	router.POST("/write", adapter.handleWriteRequest)
+	router.POST("/read", adapter.handleReadRequest)
 	return http.ListenAndServe(address, handlers.RecoveryHandler()(handlers.LoggingHandler(os.Stdout, router)))
 }
 
-func (p *MongoDBAdapter) handleWriteRequest(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+func (adapter *MongoDBAdapter) handleWriteRequest(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 
 	compressed, err := ioutil.ReadAll(r.Body)
 	if err != nil {
@@ -139,7 +132,8 @@ func (p *MongoDBAdapter) handleWriteRequest(w http.ResponseWriter, r *http.Reque
 		}
 
 		logrus.Debug("Try to insert: ", mongoTS)
-		if err := p.c.Insert(mongoTS); err != nil {
+		ctx, _ := context.WithTimeout(context.Background(), 10*time.Second)
+		if _, err := adapter.coll.InsertOne(ctx, mongoTS); err != nil {
 			logrus.Error(err)
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -147,7 +141,7 @@ func (p *MongoDBAdapter) handleWriteRequest(w http.ResponseWriter, r *http.Reque
 	}
 }
 
-func (p *MongoDBAdapter) handleReadRequest(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+func (adapter *MongoDBAdapter) handleReadRequest(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 
 	compressed, err := ioutil.ReadAll(r.Body)
 	if err != nil {
@@ -173,10 +167,10 @@ func (p *MongoDBAdapter) handleReadRequest(w http.ResponseWriter, r *http.Reques
 	results := []*prompb.QueryResult{}
 	for _, q := range req.Queries {
 
-		query := map[string]interface{}{
-			"samples": map[string]interface{}{
-				"$elemMatch": map[string]interface{}{
-					"timestamp": map[string]interface{}{
+		query := bson.M{
+			"samples": bson.M{
+				"$elemMatch": bson.M{
+					"timestamp": bson.M{
 						"$gte": q.StartTimestampMs,
 						"$lte": q.EndTimestampMs,
 					},
@@ -184,36 +178,36 @@ func (p *MongoDBAdapter) handleReadRequest(w http.ResponseWriter, r *http.Reques
 			},
 		}
 		if q.Matchers != nil && len(q.Matchers) > 0 {
-			matcher := []map[string]interface{}{}
+			matcher := []bson.M{}
 			for _, m := range q.Matchers {
 				switch m.Type {
 				case prompb.LabelMatcher_EQ:
-					matcher = append(matcher, map[string]interface{}{
-						"$elemMatch": map[string]interface{}{
+					matcher = append(matcher, bson.M{
+						"$elemMatch": bson.M{
 							m.Name: m.Value,
 						},
 					})
 				case prompb.LabelMatcher_NEQ:
-					matcher = append(matcher, map[string]interface{}{
-						"$elemMatch": map[string]interface{}{
-							m.Name: map[string]interface{}{
+					matcher = append(matcher, bson.M{
+						"$elemMatch": bson.M{
+							m.Name: bson.M{
 								"$ne": m.Value,
 							},
 						},
 					})
 				case prompb.LabelMatcher_RE:
-					matcher = append(matcher, map[string]interface{}{
-						"$elemMatch": map[string]interface{}{
-							m.Name: map[string]interface{}{
+					matcher = append(matcher, bson.M{
+						"$elemMatch": bson.M{
+							m.Name: bson.M{
 								"$regex": m.Value,
 							},
 						},
 					})
 				case prompb.LabelMatcher_NRE:
-					matcher = append(matcher, map[string]interface{}{
-						"$elemMatch": map[string]interface{}{
-							m.Name: map[string]interface{}{
-								"$not": map[string]interface{}{
+					matcher = append(matcher, bson.M{
+						"$elemMatch": bson.M{
+							m.Name: bson.M{
+								"$not": bson.M{
 									"$regex": m.Value,
 								},
 							},
@@ -221,17 +215,22 @@ func (p *MongoDBAdapter) handleReadRequest(w http.ResponseWriter, r *http.Reques
 					})
 				}
 			}
-			query["labels"] = map[string]interface{}{
+			query["labels"] = bson.M{
 				"$all": matcher,
 			}
 		}
 
-		iter := p.c.Find(query).Sort("samples.timestamp").Iter()
-		defer iter.Close()
+		findOptions := options.Find()
+		findOptions.SetSort(bson.M{"samples.timestamp": -1})
+		ctx, _ := context.WithTimeout(context.Background(), 30*time.Second)
+		cursor, err := adapter.coll.Find(ctx, query, findOptions)
+		if err != nil {
+			logrus.Error("ERROR in find by query", query, err)
+		}
+		defer cursor.Close(ctx)
 
 		timeseries := []*prompb.TimeSeries{}
-		var ts timeSeries
-		for iter.Next(&ts) {
+		for cursor.Next(ctx) {
 			timeseries = append(timeseries, &prompb.TimeSeries{})
 		}
 
