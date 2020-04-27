@@ -65,7 +65,6 @@ func main() {
 		},
 	}
 	app.Action = func(c *cli.Context) error {
-		logrus.Info("try to connect mongo url", urlString)
 		mongoDBAdapter, err := adapter.New(urlString, database, collection)
 		if err != nil {
 			logrus.Error(err)
@@ -73,6 +72,7 @@ func main() {
 		}
 		defer mongoDBAdapter.Close()
 
+		logrus.Info("SUCCESS to connect mongodb adapter,listening address: ", address)
 		if err := mongoDBAdapter.Run(address); err != nil {
 			logrus.Error(err)
 			return cli.NewExitError("listen error", 3)

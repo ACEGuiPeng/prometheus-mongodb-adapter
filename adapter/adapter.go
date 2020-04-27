@@ -44,11 +44,11 @@ type MongoDBAdapter struct {
 
 // New provides a MongoDBAdapter after initialization
 func New(urlString, database string, collection string) (*MongoDBAdapter, error) {
-
 	u, err := url.Parse(urlString)
 	if err != nil {
 		return nil, fmt.Errorf("url parse error: %s", err.Error())
 	}
+
 	logrus.Info("try to connect mongo by hosts: ", u.Host)
 	// 初始化连接参数
 	client, err := mongo.NewClient(options.Client().ApplyURI(u.String()))
