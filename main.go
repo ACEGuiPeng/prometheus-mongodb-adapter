@@ -65,6 +65,7 @@ func main() {
 		},
 	}
 	app.Action = func(c *cli.Context) error {
+		logrus.Info("try to connect mongo url", urlString)
 		mongoDBAdapter, err := adapter.New(urlString, database, collection)
 		if err != nil {
 			logrus.Error(err)
