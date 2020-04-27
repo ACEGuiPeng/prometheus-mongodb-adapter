@@ -49,8 +49,6 @@ func New(urlString, database string, collection string) (*MongoDBAdapter, error)
 	if err != nil {
 		return nil, fmt.Errorf("url parse error: %s", err.Error())
 	}
-	u.RawQuery = ""
-
 	// 初始化连接参数
 	client, err := mongo.NewClient(options.Client().ApplyURI(u.String()))
 	ctx, _ := context.WithTimeout(context.Background(), 10*time.Second)
