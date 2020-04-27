@@ -137,6 +137,8 @@ func (p *MongoDBAdapter) handleWriteRequest(w http.ResponseWriter, r *http.Reque
 				Value:     s.Value,
 			})
 		}
+
+		logrus.Debug("Try to insert: ", mongoTS)
 		if err := p.c.Insert(mongoTS); err != nil {
 			logrus.Error(err)
 			http.Error(w, err.Error(), http.StatusBadRequest)
