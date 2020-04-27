@@ -1,9 +1,10 @@
 package main
 
 import (
-	"github.com/ACEguipeng/prometheus-mongodb-adapter/adapter"
+	"./adapter"
 	"github.com/sirupsen/logrus"
 	cli "gopkg.in/urfave/cli.v1"
+	"os"
 )
 
 var (
@@ -60,14 +61,15 @@ func main() {
 		},
 	}
 	app.Action = func(c *cli.Context) error {
-		mongo, err := adapter.New(urlString, database, collection)
+		mongoDBAdapter, err := adapter.New(urlString, database, collection)
 		if err != nil {
 			logrus.Error(err)
 			return cli.NewExitError("init error", 2)
 		}
-		defer mongo.Close()
+		defer mongoDBAdapter.Close()
 
-		if err := mongo.Run(address); err != nil {
+		logrus.Info("SUCCESS to connect mongodb adapter,listening address: ", address)
+		if err := mongoDBAdapter.Run(address); err != nil {
 			logrus.Error(err)
 			return cli.NewExitError("listen error", 3)
 		}
