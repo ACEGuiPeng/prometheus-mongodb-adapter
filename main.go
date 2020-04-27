@@ -73,7 +73,6 @@ func main() {
 		}
 		defer mongoDBAdapter.Close()
 
-		logrus.Info("SUCCESS to connect mongodb adapter,listening address: ", address)
 		if err := mongoDBAdapter.Run(address); err != nil {
 			logrus.Error(err)
 			return cli.NewExitError("listen error", 3)
