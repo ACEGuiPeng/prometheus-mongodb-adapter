@@ -1,18 +1,15 @@
 package main
 
 import (
-	"os"
-
+	"github.com/ACEguipeng/prometheus-mongodb-adapter/adapter"
 	"github.com/sirupsen/logrus"
 	cli "gopkg.in/urfave/cli.v1"
-
-	"github.com/sasurai-ossan/prometheus-mongodb-adapter/adapter"
 )
 
 var (
 	appName    = "prometheus-mongodb-adapter"
 	appUsage   = ""
-	appVersion = "undefined"
+	appVersion = "V20200427"
 )
 
 var appHelpTemplate = `NAME:
